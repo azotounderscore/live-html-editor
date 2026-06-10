@@ -23,6 +23,7 @@
             --font-mono: 'Cascadia Code', 'Fira Code', 'Consolas', 'Monaco', 'Courier New', monospace;
             --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
             --min-panel-width: 150px;
+            --gutter-width: 44px;
         }
 
         * { margin:0; padding:0; box-sizing:border-box; }
@@ -85,9 +86,35 @@
             overflow:hidden; display:flex; flex-direction:column; background:var(--surface);
         }
         .editor-container { flex:1; position:relative; overflow:hidden; }
+
+        /* LINE NUMBERS */
+        .line-numbers {
+            position:absolute;
+            left:0; top:0; bottom:0;
+            width: var(--gutter-width);
+            overflow:hidden;
+            background: var(--surface);
+            border-right: 1px solid var(--border);
+            z-index:3;
+            user-select: none;
+        }
+        .line-numbers pre {
+            font-family: var(--font-mono);
+            font-size: 14px;
+            line-height: 1.6;
+            padding: 16px 0;
+            margin:0;
+            white-space: pre;
+            color: #858585;
+            text-align: right;
+            tab-size: 2;
+            -moz-tab-size: 2;
+        }
+
         .editor-highlight {
             position:absolute; top:0; left:0; right:0; bottom:0;
-            padding:16px; font-family:var(--font-mono); font-size:14px;
+            padding:16px; padding-left: calc(16px + var(--gutter-width));
+            font-family:var(--font-mono); font-size:14px;
             line-height:1.6; white-space:pre; overflow:auto;
             pointer-events:none; z-index:1; color:transparent;
             background:transparent; border:none; tab-size:2; -moz-tab-size:2;
@@ -95,7 +122,8 @@
         .editor-highlight code { font-family:inherit; font-size:inherit; line-height:inherit; tab-size:inherit; -moz-tab-size:inherit; }
         .editor-textarea {
             position:absolute; top:0; left:0; right:0; bottom:0;
-            padding:16px; font-family:var(--font-mono); font-size:14px;
+            padding:16px; padding-left: calc(16px + var(--gutter-width));
+            font-family:var(--font-mono); font-size:14px;
             line-height:1.6; white-space:pre; overflow:auto;
             z-index:2; background:transparent; color:transparent;
             caret-color:#fff; border:none; outline:none; resize:none;
@@ -178,6 +206,19 @@
             box-shadow:0 4px 12px rgba(0,0,0,0.4); pointer-events:none;
             white-space:nowrap; letter-spacing:0.3px; transition:opacity 0.1s;
         }
+
+        /* STATUS BAR */
+        .status-bar {
+            padding: 4px 14px;
+            background: var(--surface2);
+            border-top: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            color: var(--text-muted);
+            flex-shrink: 0;
+        }
+        .status-bar span + span { margin-left: 20px; }
     </style>
 </head>
 <body>
@@ -201,9 +242,18 @@
     <div class="main" id="mainContainer">
         <div class="editor-panel" id="editorPanel">
             <div class="editor-container" id="editorContainer">
+                <!-- Numeri di riga -->
+                <div class="line-numbers" id="lineNumbers">
+                    <pre></pre>
+                </div>
                 <pre class="editor-highlight" id="highlightLayer"><code></code></pre>
                 <textarea class="editor-textarea" id="editorTextarea" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
                 <div class="autocomplete-dropdown" id="autocompleteDropdown"></div>
+            </div>
+            <!-- Barra di stato -->
+            <div class="status-bar" id="statusBar">
+                <span id="charCount">0 caratteri</span>
+                <span id="fileSize">0 B</span>
             </div>
         </div>
 
@@ -237,6 +287,26 @@
             const editorContainer = document.getElementById('editorContainer');
             const resizeOverlay = document.getElementById('resizeOverlay');
             const resizeIndicator = document.getElementById('resizeIndicator');
+
+            // Line numbers e status bar
+            const lineNumbersDiv = document.getElementById('lineNumbers');
+            const lineNumbersPre = lineNumbersDiv.querySelector('pre');
+            const charCountSpan = document.getElementById('charCount');
+            const fileSizeSpan = document.getElementById('fileSize');
+
+            // ============== GESTIONE MODIFICHE NON SALVATE ==============
+            let hasUnsavedChanges = false;
+            function markSaved() { hasUnsavedChanges = false; }
+            function markChanged() { hasUnsavedChanges = true; }
+
+            window.addEventListener('beforeunload', (e) => {
+                if (hasUnsavedChanges) {
+                    e.preventDefault();
+                    e.returnValue = '';
+                    return '';
+                }
+            });
+            // ============================================================
 
             const voidElements = new Set([
                 'area','base','br','col','embed','hr','img','input',
@@ -408,7 +478,7 @@
             let autocompleteIndex = -1;
             let filteredSuggestions = [];
             let currentWordData = null;
-            let currentCompletionType = 'html'; // 'html' o 'css'
+            let currentCompletionType = 'html';
 
             let isDragging = false;
             let charWidth = 8.4;
@@ -431,8 +501,8 @@
 </html>`;
 
             editorTextarea.value = initialHTML;
-            updateHighlight();
-            updatePreview();
+            onContentChanged();
+            markSaved();
 
             function measureCharMetrics() {
                 const measurer = document.createElement('span');
@@ -455,6 +525,47 @@
                 measureCharMetrics();
                 if (autocompleteVisible) positionAutocomplete();
             });
+
+            // ============= LINE NUMBERS & STATUS BAR =============
+            function refreshLineNumbers() {
+                const text = editorTextarea.value;
+                const lines = text.split('\n').length;
+                const numbers = Array.from({ length: lines }, (_, i) => i + 1).join('\n');
+                lineNumbersPre.textContent = numbers;
+                // Sync scroll
+                syncLineNumbersScroll();
+            }
+
+            function syncLineNumbersScroll() {
+                lineNumbersDiv.scrollTop = editorTextarea.scrollTop;
+            }
+
+            function updateStatusBar() {
+                const text = editorTextarea.value;
+                const charCount = text.length;
+                charCountSpan.textContent = `${charCount} caratteri`;
+
+                const blob = new Blob([text], { type: 'text/html' });
+                const bytes = blob.size;
+                let sizeText;
+                if (bytes < 1024) {
+                    sizeText = `${bytes} B`;
+                } else if (bytes < 1024 * 1024) {
+                    sizeText = `${(bytes / 1024).toFixed(1)} KB`;
+                } else {
+                    sizeText = `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+                }
+                fileSizeSpan.textContent = sizeText;
+            }
+
+            function onContentChanged() {
+                updateHighlight();
+                schedulePreviewUpdate();
+                markChanged();
+                refreshLineNumbers();
+                updateStatusBar();
+            }
+            // ===================================================
 
             // Sintassi highlighting (invariata)
             function tokenize(html) {
@@ -590,18 +701,21 @@
                 return cssSnippets.filter(s => s.name.startsWith(lower));
             }
 
+            // Posizionamento autocomplete (tenendo conto del gutter)
+            const GUTTER_WIDTH = 44; // corrisponde a --gutter-width nel CSS
+            const PADDING_LEFT = 16 + GUTTER_WIDTH; // 60px
             function positionAutocomplete() {
                 if (!currentWordData) return;
                 const containerRect = editorContainer.getBoundingClientRect();
                 const scrollTop = editorTextarea.scrollTop;
                 const scrollLeft = editorTextarea.scrollLeft;
-                const paddingTop = 16, paddingLeft = 16;
+                const paddingTop = 16;
                 const textBeforeCursor = editorTextarea.value.substring(0, currentWordData.start);
                 const lines = textBeforeCursor.split('\n');
                 const cursorLine = lines.length - 1;
                 const cursorCol = lines[lines.length - 1].length;
                 const topInContent = cursorLine * lineHeightPx + paddingTop;
-                const leftInContent = cursorCol * charWidth + paddingLeft;
+                const leftInContent = cursorCol * charWidth + PADDING_LEFT;
                 let top = topInContent - scrollTop + lineHeightPx;
                 let left = leftInContent - scrollLeft;
                 const dropdownHeight = Math.min(filteredSuggestions.length * 32, 220);
@@ -666,49 +780,41 @@
                 const newCursorPos = wordStart + cursorOffsetFromStart;
                 editorTextarea.setSelectionRange(newCursorPos, newCursorPos);
                 hideAutocomplete();
-                updateHighlight();
-                schedulePreviewUpdate();
+                onContentChanged();
                 editorTextarea.focus();
             }
 
-            // ============ INDENTAZIONE AUTOMATICA CON INVIO ============
+            // Indentazione automatica con Invio
             function handleEnterKey(e) {
-                if (autocompleteVisible) return false; // gestito altrove
+                if (autocompleteVisible) return false;
                 e.preventDefault();
                 const textarea = editorTextarea;
                 const start = textarea.selectionStart;
                 const end = textarea.selectionEnd;
                 const text = textarea.value;
 
-                // Ottieni l'inizio della riga corrente (indice del primo carattere dopo l'ultimo newline)
                 const beforeCursor = text.substring(0, start);
                 const lineStart = beforeCursor.lastIndexOf('\n') + 1;
 
-                // Trova la fine della riga corrente (prossimo newline o fine testo)
                 const nextNewline = text.indexOf('\n', start);
                 const lineEnd = nextNewline === -1 ? text.length : nextNewline;
 
-                // Testo completo della riga corrente
                 const currentLine = text.substring(lineStart, lineEnd);
-
-                // Estrai gli spazi/tab iniziali
                 const leadingWhitespace = currentLine.match(/^(\s*)/)[1];
 
-                // Inserisci newline + la stessa indentazione
                 const insertion = '\n' + leadingWhitespace;
                 textarea.value = text.substring(0, start) + insertion + text.substring(end);
                 const newCursorPos = start + insertion.length;
                 textarea.setSelectionRange(newCursorPos, newCursorPos);
 
-                updateHighlight();
-                schedulePreviewUpdate();
+                onContentChanged();
                 return true;
             }
 
             // Event listeners
             editorTextarea.addEventListener('input', () => {
-                updateHighlight();
-                schedulePreviewUpdate();
+                onContentChanged();
+
                 const wordData = getWordAtCursor();
                 const cursorPos = editorTextarea.selectionStart;
                 const text = editorTextarea.value;
@@ -742,6 +848,7 @@
             editorTextarea.addEventListener('scroll', () => {
                 highlightLayer.scrollTop = editorTextarea.scrollTop;
                 highlightLayer.scrollLeft = editorTextarea.scrollLeft;
+                syncLineNumbersScroll();
                 if (autocompleteVisible) positionAutocomplete();
             });
 
@@ -773,7 +880,6 @@
                     }
                 }
 
-                // Indentazione automatica con Enter (solo se l'autocomplete non è visibile)
                 if (e.key === 'Enter' && !autocompleteVisible) {
                     handleEnterKey(e);
                     return;
@@ -791,8 +897,7 @@
                     const end = ta.selectionEnd;
                     ta.value = ta.value.substring(0, start) + '  ' + ta.value.substring(end);
                     ta.setSelectionRange(start + 2, start + 2);
-                    updateHighlight();
-                    schedulePreviewUpdate();
+                    onContentChanged();
                 }
             });
 
@@ -816,6 +921,7 @@
                 editorTextarea.scrollLeft += e.deltaX;
                 highlightLayer.scrollTop = editorTextarea.scrollTop;
                 highlightLayer.scrollLeft = editorTextarea.scrollLeft;
+                syncLineNumbersScroll();
                 e.preventDefault();
                 if (autocompleteVisible) positionAutocomplete();
             });
@@ -914,7 +1020,7 @@
                 }
             });
 
-            // Carica / Download
+            // Carica / Download (reset stato salvato)
             btnLoad.addEventListener('click', () => fileInput.click());
             fileInput.addEventListener('change', () => {
                 const file = fileInput.files[0];
@@ -922,9 +1028,8 @@
                 const reader = new FileReader();
                 reader.onload = (e) => {
                     editorTextarea.value = e.target.result;
-                    updateHighlight();
-                    updatePreview();
-                    hideAutocomplete();
+                    onContentChanged();
+                    markSaved();
                     fileInput.value = '';
                 };
                 reader.readAsText(file);
@@ -936,6 +1041,7 @@
                 a.href = url; a.download = 'index.html';
                 document.body.appendChild(a); a.click(); document.body.removeChild(a);
                 URL.revokeObjectURL(url);
+                markSaved();
             });
             document.addEventListener('keydown', (e) => {
                 if ((e.ctrlKey || e.metaKey) && e.key === 's') {
@@ -946,17 +1052,20 @@
                     a.href = url; a.download = 'index.html';
                     document.body.appendChild(a); a.click(); document.body.removeChild(a);
                     URL.revokeObjectURL(url);
+                    markSaved();
                 }
             });
 
             // Inizializza
-            updateHighlight();
+            onContentChanged();
             updatePreview();
             editorTextarea.focus();
             editorPanel.style.flex = '1';
             previewPanel.style.flex = '1';
             editorPanel.style.width = '';
             previewPanel.style.width = '';
+            refreshLineNumbers(); // assicura che i numeri vengano mostrati subito
+            syncLineNumbersScroll();
         })();
     </script>
 </body>
