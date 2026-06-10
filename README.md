@@ -1,1 +1,2 @@
-# live-html-editor
+# **Live HTML editor**
+Built using DeepSeek AI
