@@ -1,0 +1,963 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>HTML Editor - Live Preview con Autocomplete HTML e CSS</title>
+    <style>
+        :root {
+            --bg: #1a1a1c;
+            --surface: #1e1e20;
+            --surface2: #252528;
+            --border: #3a3a3e;
+            --text: #d4d4d4;
+            --text-muted: #888;
+            --accent: #4a9eff;
+            --accent-hover: #5ab0ff;
+            --tag-color: #569cd6;
+            --attr-color: #9cdcfe;
+            --string-color: #ce9178;
+            --comment-color: #6a9955;
+            --doctype-color: #808080;
+            --divider-hover: #5a9cff;
+            --font-mono: 'Cascadia Code', 'Fira Code', 'Consolas', 'Monaco', 'Courier New', monospace;
+            --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            --min-panel-width: 150px;
+        }
+
+        * { margin:0; padding:0; box-sizing:border-box; }
+
+        body {
+            font-family: var(--font-ui);
+            background: var(--bg);
+            color: var(--text);
+            height:100vh; width:100vw;
+            overflow:hidden;
+            display:flex; flex-direction:column;
+            user-select:none; -webkit-user-select:none;
+        }
+
+        .topbar {
+            display:flex; align-items:center; gap:10px; padding:8px 14px;
+            background:var(--surface2); border-bottom:1px solid var(--border);
+            flex-shrink:0; z-index:20; flex-wrap:wrap; min-height:44px;
+        }
+        .topbar .brand {
+            font-weight:700; font-size:13px; letter-spacing:0.4px; color:#fff;
+            margin-right:8px; white-space:nowrap;
+        }
+        .topbar button {
+            font-family:var(--font-ui); font-size:12px; font-weight:500;
+            padding:7px 14px; border-radius:5px; border:1px solid var(--border);
+            background:var(--surface); color:var(--text); cursor:pointer;
+            transition:all 0.15s; white-space:nowrap; letter-spacing:0.2px;
+        }
+        .topbar button:hover { background:#2d2d30; border-color:#555; }
+        .topbar button.accent {
+            background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600;
+        }
+        .topbar button.accent:hover { background:var(--accent-hover); }
+        .topbar .spacer { flex:1; min-width:8px; }
+        .topbar .toggle-group {
+            display:flex; align-items:center; gap:6px; font-size:11px;
+            color:var(--text-muted); white-space:nowrap;
+        }
+        .topbar .toggle-switch { position:relative; width:38px; height:20px; flex-shrink:0; }
+        .topbar .toggle-switch input { opacity:0; width:0; height:0; }
+        .topbar .toggle-switch .slider {
+            position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0;
+            background:#555; border-radius:20px; transition:0.2s;
+        }
+        .topbar .toggle-switch .slider::before {
+            content:''; position:absolute; height:14px; width:14px; left:3px;
+            bottom:3px; background:#fff; border-radius:50%; transition:0.2s;
+        }
+        .topbar .toggle-switch input:checked+.slider { background:var(--accent); }
+        .topbar .toggle-switch input:checked+.slider::before { transform:translateX(18px); }
+        .topbar .shortcut-hint {
+            font-size:10px; color:#666; white-space:nowrap; letter-spacing:0.3px;
+        }
+
+        .main { display:flex; flex:1; overflow:hidden; position:relative; }
+
+        .editor-panel {
+            flex:1; min-width:var(--min-panel-width); position:relative;
+            overflow:hidden; display:flex; flex-direction:column; background:var(--surface);
+        }
+        .editor-container { flex:1; position:relative; overflow:hidden; }
+        .editor-highlight {
+            position:absolute; top:0; left:0; right:0; bottom:0;
+            padding:16px; font-family:var(--font-mono); font-size:14px;
+            line-height:1.6; white-space:pre; overflow:auto;
+            pointer-events:none; z-index:1; color:transparent;
+            background:transparent; border:none; tab-size:2; -moz-tab-size:2;
+        }
+        .editor-highlight code { font-family:inherit; font-size:inherit; line-height:inherit; tab-size:inherit; -moz-tab-size:inherit; }
+        .editor-textarea {
+            position:absolute; top:0; left:0; right:0; bottom:0;
+            padding:16px; font-family:var(--font-mono); font-size:14px;
+            line-height:1.6; white-space:pre; overflow:auto;
+            z-index:2; background:transparent; color:transparent;
+            caret-color:#fff; border:none; outline:none; resize:none;
+            tab-size:2; -moz-tab-size:2; -webkit-text-fill-color:transparent;
+        }
+        .editor-textarea::selection { background:rgba(100,160,255,0.35); }
+        .editor-textarea::-webkit-scrollbar, .editor-highlight::-webkit-scrollbar { width:8px; height:8px; }
+        .editor-textarea::-webkit-scrollbar-track, .editor-highlight::-webkit-scrollbar-track { background:transparent; }
+        .editor-textarea::-webkit-scrollbar-thumb, .editor-highlight::-webkit-scrollbar-thumb { background:#444; border-radius:4px; }
+        .editor-textarea::-webkit-scrollbar-thumb:hover, .editor-highlight::-webkit-scrollbar-thumb:hover { background:#555; }
+
+        .hl-tag { color:var(--tag-color); }
+        .hl-attr { color:var(--attr-color); }
+        .hl-string { color:var(--string-color); }
+        .hl-comment { color:var(--comment-color); font-style:italic; }
+        .hl-doctype { color:var(--doctype-color); font-style:italic; }
+        .hl-text { color:#d4d4d4; }
+        .hl-punct { color:#d4d4d4; }
+        .hl-equals { color:#d4d4d4; }
+
+        .autocomplete-dropdown {
+            display:none; position:absolute; z-index:30;
+            background:#252526; border:1px solid #454545;
+            border-radius:6px; box-shadow:0 8px 24px rgba(0,0,0,0.55);
+            max-height:220px; overflow-y:auto; min-width:200px;
+            font-family:var(--font-mono); font-size:13px;
+            user-select:none; -webkit-user-select:none;
+        }
+        .autocomplete-dropdown.visible { display:block; }
+        .autocomplete-dropdown::-webkit-scrollbar { width:5px; }
+        .autocomplete-dropdown::-webkit-scrollbar-track { background:transparent; }
+        .autocomplete-dropdown::-webkit-scrollbar-thumb { background:#555; border-radius:3px; }
+        .autocomplete-item {
+            padding:6px 12px; cursor:pointer; display:flex;
+            justify-content:space-between; align-items:center; gap:16px;
+            color:#d4d4d4; transition:background 0.08s;
+        }
+        .autocomplete-item:hover, .autocomplete-item.active { background:#094771; color:#fff; }
+        .autocomplete-item .snippet-preview {
+            color:#888; font-size:11px; white-space:nowrap; overflow:hidden;
+            text-overflow:ellipsis; max-width:140px; direction:rtl;
+            text-align:left; unicode-bidi:plaintext;
+        }
+        .autocomplete-item.active .snippet-preview { color:#bbb; }
+
+        .divider {
+            width:6px; cursor:col-resize; background:var(--border); flex-shrink:0;
+            position:relative; z-index:15; transition:background 0.15s;
+            display:flex; align-items:center; justify-content:center;
+        }
+        .divider:hover, .divider.dragging { background:var(--divider-hover); }
+        .divider::after {
+            content:''; width:2px; height:32px; border-radius:1px;
+            background:#666; transition:background 0.15s;
+        }
+        .divider:hover::after, .divider.dragging::after { background:#fff; }
+
+        .preview-panel {
+            flex:1; min-width:var(--min-panel-width); display:flex;
+            flex-direction:column; background:#fff; position:relative;
+        }
+        .preview-label {
+            font-size:10px; text-transform:uppercase; letter-spacing:1px;
+            color:#999; padding:6px 14px; background:#f5f5f5;
+            border-bottom:1px solid #e0e0e0; flex-shrink:0;
+        }
+        .preview-iframe { flex:1; width:100%; border:none; background:#fff; }
+
+        .resize-overlay {
+            position:fixed; top:0; left:0; width:100%; height:100%;
+            z-index:9999; cursor:col-resize; background:transparent; display:none;
+        }
+        .resize-overlay.active { display:block; }
+
+        .resize-indicator {
+            position:fixed; z-index:10000; background:#1e1e20e6;
+            backdrop-filter:blur(8px); border:1px solid #5a9cff;
+            border-radius:8px; padding:6px 12px; font-family:var(--font-mono);
+            font-size:13px; font-weight:500; color:#fff;
+            box-shadow:0 4px 12px rgba(0,0,0,0.4); pointer-events:none;
+            white-space:nowrap; letter-spacing:0.3px; transition:opacity 0.1s;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="topbar">
+        <span class="brand">⚡ HTML Editor</span>
+        <button id="btnLoad" title="Carica un file HTML">📂 Carica</button>
+        <button id="btnDownload" title="Scarica il file HTML">💾 Scarica</button>
+        <span class="spacer"></span>
+        <span class="shortcut-hint" id="hintManual">Ctrl+Enter per aggiornare</span>
+        <div class="toggle-group">
+            <span>Auto-update</span>
+            <label class="toggle-switch">
+                <input type="checkbox" id="toggleAuto" checked>
+                <span class="slider"></span>
+            </label>
+        </div>
+    </div>
+    <input type="file" id="fileInput" accept=".html,.htm,.txt" style="display:none;">
+
+    <div class="main" id="mainContainer">
+        <div class="editor-panel" id="editorPanel">
+            <div class="editor-container" id="editorContainer">
+                <pre class="editor-highlight" id="highlightLayer"><code></code></pre>
+                <textarea class="editor-textarea" id="editorTextarea" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+                <div class="autocomplete-dropdown" id="autocompleteDropdown"></div>
+            </div>
+        </div>
+
+        <div class="divider" id="divider" title="Trascina per ridimensionare (mostra dimensioni anteprima)"></div>
+
+        <div class="preview-panel" id="previewPanel">
+            <div class="preview-label">Preview</div>
+            <iframe class="preview-iframe" id="previewIframe" sandbox="allow-scripts allow-same-origin"></iframe>
+        </div>
+    </div>
+
+    <div id="resizeOverlay" class="resize-overlay"></div>
+    <div id="resizeIndicator" class="resize-indicator" style="display: none;"></div>
+
+    <script>
+        (function() {
+            const editorTextarea = document.getElementById('editorTextarea');
+            const highlightLayer = document.getElementById('highlightLayer');
+            const highlightCode = highlightLayer.querySelector('code');
+            const autocompleteDropdown = document.getElementById('autocompleteDropdown');
+            const previewIframe = document.getElementById('previewIframe');
+            const divider = document.getElementById('divider');
+            const editorPanel = document.getElementById('editorPanel');
+            const previewPanel = document.getElementById('previewPanel');
+            const mainContainer = document.getElementById('mainContainer');
+            const toggleAuto = document.getElementById('toggleAuto');
+            const hintManual = document.getElementById('hintManual');
+            const btnLoad = document.getElementById('btnLoad');
+            const btnDownload = document.getElementById('btnDownload');
+            const fileInput = document.getElementById('fileInput');
+            const editorContainer = document.getElementById('editorContainer');
+            const resizeOverlay = document.getElementById('resizeOverlay');
+            const resizeIndicator = document.getElementById('resizeIndicator');
+
+            const voidElements = new Set([
+                'area','base','br','col','embed','hr','img','input',
+                'link','meta','param','source','track','wbr'
+            ]);
+
+            // HTML Snippets (invariati)
+            const htmlSnippets = [
+                { name:'a', snippet:'<a href=""></a>', cursorOffset:9 },
+                { name:'abbr', snippet:'<abbr></abbr>', cursorOffset:6 },
+                { name:'address', snippet:'<address></address>', cursorOffset:9 },
+                { name:'area', snippet:'<area shape="" coords="" href="" alt="">', cursorOffset:5, void:true },
+                { name:'article', snippet:'<article></article>', cursorOffset:9 },
+                { name:'aside', snippet:'<aside></aside>', cursorOffset:7 },
+                { name:'audio', snippet:'<audio controls>\n  <source src="" type="">\n</audio>', cursorOffset:15 },
+                { name:'b', snippet:'<b></b>', cursorOffset:3 },
+                { name:'base', snippet:'<base href="">', cursorOffset:6, void:true },
+                { name:'blockquote', snippet:'<blockquote></blockquote>', cursorOffset:12 },
+                { name:'body', snippet:'<body>\n  \n</body>', cursorOffset:9 },
+                { name:'br', snippet:'<br>', cursorOffset:4, void:true },
+                { name:'button', snippet:'<button type=""></button>', cursorOffset:14 },
+                { name:'canvas', snippet:'<canvas></canvas>', cursorOffset:8 },
+                { name:'caption', snippet:'<caption></caption>', cursorOffset:9 },
+                { name:'code', snippet:'<code></code>', cursorOffset:6 },
+                { name:'col', snippet:'<col>', cursorOffset:4, void:true },
+                { name:'datalist', snippet:'<datalist>\n  <option value="">\n</datalist>', cursorOffset:11 },
+                { name:'dd', snippet:'<dd></dd>', cursorOffset:4 },
+                { name:'del', snippet:'<del></del>', cursorOffset:5 },
+                { name:'details', snippet:'<details>\n  <summary></summary>\n</details>', cursorOffset:10 },
+                { name:'dfn', snippet:'<dfn></dfn>', cursorOffset:5 },
+                { name:'dialog', snippet:'<dialog></dialog>', cursorOffset:8 },
+                { name:'div', snippet:'<div></div>', cursorOffset:5 },
+                { name:'dl', snippet:'<dl>\n  <dt></dt>\n  <dd></dd>\n</dl>', cursorOffset:4 },
+                { name:'dt', snippet:'<dt></dt>', cursorOffset:4 },
+                { name:'em', snippet:'<em></em>', cursorOffset:4 },
+                { name:'embed', snippet:'<embed src="" type="">', cursorOffset:6, void:true },
+                { name:'fieldset', snippet:'<fieldset>\n  <legend></legend>\n</fieldset>', cursorOffset:11 },
+                { name:'figcaption', snippet:'<figcaption></figcaption>', cursorOffset:12 },
+                { name:'figure', snippet:'<figure>\n  \n  <figcaption></figcaption>\n</figure>', cursorOffset:8 },
+                { name:'footer', snippet:'<footer></footer>', cursorOffset:8 },
+                { name:'form', snippet:'<form action="" method="">\n  \n</form>', cursorOffset:6 },
+                { name:'h1', snippet:'<h1></h1>', cursorOffset:4 },
+                { name:'h2', snippet:'<h2></h2>', cursorOffset:4 },
+                { name:'h3', snippet:'<h3></h3>', cursorOffset:4 },
+                { name:'h4', snippet:'<h4></h4>', cursorOffset:4 },
+                { name:'h5', snippet:'<h5></h5>', cursorOffset:4 },
+                { name:'h6', snippet:'<h6></h6>', cursorOffset:4 },
+                { name:'head', snippet:'<head>\n  <meta charset="UTF-8">\n  <title></title>\n</head>', cursorOffset:6 },
+                { name:'header', snippet:'<header></header>', cursorOffset:8 },
+                { name:'hgroup', snippet:'<hgroup></hgroup>', cursorOffset:8 },
+                { name:'hr', snippet:'<hr>', cursorOffset:4, void:true },
+                { name:'html', snippet:'<html lang="">\n<head>\n  <meta charset="UTF-8">\n</head>\n<body>\n  \n</body>\n</html>', cursorOffset:6 },
+                { name:'i', snippet:'<i></i>', cursorOffset:3 },
+                { name:'iframe', snippet:'<iframe src="" title=""></iframe>', cursorOffset:7 },
+                { name:'img', snippet:'<img src="" alt="">', cursorOffset:5, void:true },
+                { name:'input', snippet:'<input type="" name="">', cursorOffset:6, void:true },
+                { name:'ins', snippet:'<ins></ins>', cursorOffset:5 },
+                { name:'kbd', snippet:'<kbd></kbd>', cursorOffset:5 },
+                { name:'label', snippet:'<label for=""></label>', cursorOffset:7 },
+                { name:'legend', snippet:'<legend></legend>', cursorOffset:8 },
+                { name:'li', snippet:'<li></li>', cursorOffset:4 },
+                { name:'link', snippet:'<link rel="stylesheet" href="">', cursorOffset:6, void:true },
+                { name:'main', snippet:'<main></main>', cursorOffset:6 },
+                { name:'map', snippet:'<map name=""></map>', cursorOffset:6 },
+                { name:'mark', snippet:'<mark></mark>', cursorOffset:6 },
+                { name:'meta', snippet:'<meta charset="UTF-8">', cursorOffset:5, void:true },
+                { name:'meter', snippet:'<meter value="" min="" max=""></meter>', cursorOffset:7 },
+                { name:'nav', snippet:'<nav></nav>', cursorOffset:5 },
+                { name:'noscript', snippet:'<noscript></noscript>', cursorOffset:10 },
+                { name:'object', snippet:'<object data="" type=""></object>', cursorOffset:7 },
+                { name:'ol', snippet:'<ol>\n  <li></li>\n</ol>', cursorOffset:4 },
+                { name:'optgroup', snippet:'<optgroup label="">\n  <option value=""></option>\n</optgroup>', cursorOffset:10 },
+                { name:'option', snippet:'<option value=""></option>', cursorOffset:8 },
+                { name:'output', snippet:'<output></output>', cursorOffset:8 },
+                { name:'p', snippet:'<p></p>', cursorOffset:3 },
+                { name:'param', snippet:'<param name="" value="">', cursorOffset:6, void:true },
+                { name:'picture', snippet:'<picture>\n  <source srcset="" type="">\n  <img src="" alt="">\n</picture>', cursorOffset:10 },
+                { name:'pre', snippet:'<pre></pre>', cursorOffset:5 },
+                { name:'progress', snippet:'<progress value="" max=""></progress>', cursorOffset:9 },
+                { name:'q', snippet:'<q></q>', cursorOffset:3 },
+                { name:'rp', snippet:'<rp></rp>', cursorOffset:4 },
+                { name:'rt', snippet:'<rt></rt>', cursorOffset:4 },
+                { name:'ruby', snippet:'<ruby></ruby>', cursorOffset:6 },
+                { name:'s', snippet:'<s></s>', cursorOffset:3 },
+                { name:'samp', snippet:'<samp></samp>', cursorOffset:6 },
+                { name:'script', snippet:'<script src=""><\/script>', cursorOffset:8 },
+                { name:'section', snippet:'<section></section>', cursorOffset:9 },
+                { name:'select', snippet:'<select name="">\n  <option value=""></option>\n</select>', cursorOffset:8 },
+                { name:'small', snippet:'<small></small>', cursorOffset:7 },
+                { name:'source', snippet:'<source src="" type="">', cursorOffset:7, void:true },
+                { name:'span', snippet:'<span></span>', cursorOffset:6 },
+                { name:'strong', snippet:'<strong></strong>', cursorOffset:8 },
+                { name:'style', snippet:'<style>\n  \n</style>', cursorOffset:9 },
+                { name:'sub', snippet:'<sub></sub>', cursorOffset:5 },
+                { name:'summary', snippet:'<summary></summary>', cursorOffset:9 },
+                { name:'sup', snippet:'<sup></sup>', cursorOffset:5 },
+                { name:'svg', snippet:'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">\n  \n</svg>', cursorOffset:62 },
+                { name:'table', snippet:'<table>\n  <thead>\n    <tr>\n      <th></th>\n    </tr>\n  </thead>\n  <tbody>\n    <tr>\n      <td>\n    </tr>\n  </tbody>\n</table>', cursorOffset:7 },
+                { name:'tbody', snippet:'<tbody>\n  <tr>\n    <td>\n  </tr>\n</tbody>', cursorOffset:7 },
+                { name:'td', snippet:'<td>', cursorOffset:4 },
+                { name:'template', snippet:'<template></template>', cursorOffset:10 },
+                { name:'textarea', snippet:'<textarea name="" rows="" cols=""></textarea>', cursorOffset:9 },
+                { name:'tfoot', snippet:'<tfoot>\n  <tr>\n    <td>\n  </tr>\n</tfoot>', cursorOffset:7 },
+                { name:'th', snippet:'<th></th>', cursorOffset:4 },
+                { name:'thead', snippet:'<thead>\n  <tr>\n    <th></th>\n  </tr>\n</thead>', cursorOffset:7 },
+                { name:'time', snippet:'<time datetime=""></time>', cursorOffset:6 },
+                { name:'title', snippet:'<title></title>', cursorOffset:7 },
+                { name:'tr', snippet:'<tr>\n  <td>\n  </table>', cursorOffset:4 },
+                { name:'track', snippet:'<track src="" kind="" srclang="" label="">', cursorOffset:6, void:true },
+                { name:'u', snippet:'<u></u>', cursorOffset:3 },
+                { name:'ul', snippet:'<ul>\n  <li></li>\n</ul>', cursorOffset:4 },
+                { name:'var', snippet:'<var></var>', cursorOffset:5 },
+                { name:'video', snippet:'<video controls>\n  <source src="" type="">\n</video>', cursorOffset:7 },
+                { name:'wbr', snippet:'<wbr>', cursorOffset:5, void:true },
+            ];
+            const htmlSnippetMap = {};
+            htmlSnippets.forEach(s => { htmlSnippetMap[s.name] = s; });
+
+            // CSS Snippets per proprietà
+            const cssSnippets = [
+                { name:'align-content', snippet:'align-content: ;', cursorOffset:14 },
+                { name:'align-items', snippet:'align-items: ;', cursorOffset:13 },
+                { name:'align-self', snippet:'align-self: ;', cursorOffset:12 },
+                { name:'animation', snippet:'animation: ;', cursorOffset:11 },
+                { name:'background', snippet:'background: ;', cursorOffset:12 },
+                { name:'border', snippet:'border: ;', cursorOffset:8 },
+                { name:'border-radius', snippet:'border-radius: ;', cursorOffset:14 },
+                { name:'bottom', snippet:'bottom: ;', cursorOffset:8 },
+                { name:'box-shadow', snippet:'box-shadow: ;', cursorOffset:12 },
+                { name:'color', snippet:'color: ;', cursorOffset:7 },
+                { name:'column-gap', snippet:'column-gap: ;', cursorOffset:11 },
+                { name:'cursor', snippet:'cursor: ;', cursorOffset:8 },
+                { name:'display', snippet:'display: ;', cursorOffset:9 },
+                { name:'flex', snippet:'flex: ;', cursorOffset:6 },
+                { name:'flex-direction', snippet:'flex-direction: ;', cursorOffset:16 },
+                { name:'flex-wrap', snippet:'flex-wrap: ;', cursorOffset:11 },
+                { name:'font-family', snippet:'font-family: ;', cursorOffset:13 },
+                { name:'font-size', snippet:'font-size: ;', cursorOffset:11 },
+                { name:'font-weight', snippet:'font-weight: ;', cursorOffset:13 },
+                { name:'gap', snippet:'gap: ;', cursorOffset:5 },
+                { name:'grid-template-columns', snippet:'grid-template-columns: ;', cursorOffset:23 },
+                { name:'height', snippet:'height: ;', cursorOffset:8 },
+                { name:'justify-content', snippet:'justify-content: ;', cursorOffset:17 },
+                { name:'left', snippet:'left: ;', cursorOffset:6 },
+                { name:'margin', snippet:'margin: ;', cursorOffset:8 },
+                { name:'max-width', snippet:'max-width: ;', cursorOffset:11 },
+                { name:'min-height', snippet:'min-height: ;', cursorOffset:12 },
+                { name:'opacity', snippet:'opacity: ;', cursorOffset:9 },
+                { name:'overflow', snippet:'overflow: ;', cursorOffset:10 },
+                { name:'padding', snippet:'padding: ;', cursorOffset:9 },
+                { name:'position', snippet:'position: ;', cursorOffset:10 },
+                { name:'right', snippet:'right: ;', cursorOffset:7 },
+                { name:'row-gap', snippet:'row-gap: ;', cursorOffset:9 },
+                { name:'text-align', snippet:'text-align: ;', cursorOffset:12 },
+                { name:'top', snippet:'top: ;', cursorOffset:5 },
+                { name:'transform', snippet:'transform: ;', cursorOffset:11 },
+                { name:'transition', snippet:'transition: ;', cursorOffset:12 },
+                { name:'visibility', snippet:'visibility: ;', cursorOffset:12 },
+                { name:'width', snippet:'width: ;', cursorOffset:7 },
+                { name:'z-index', snippet:'z-index: ;', cursorOffset:9 },
+            ];
+            const cssSnippetMap = {};
+            cssSnippets.forEach(s => { cssSnippetMap[s.name] = s; });
+
+            // Variabili globali
+            let autoUpdate = true;
+            let updateTimeout = null;
+            let autocompleteVisible = false;
+            let autocompleteIndex = -1;
+            let filteredSuggestions = [];
+            let currentWordData = null;
+            let currentCompletionType = 'html'; // 'html' o 'css'
+
+            let isDragging = false;
+            let charWidth = 8.4;
+            let lineHeightPx = 22.4;
+            const UPDATE_DEBOUNCE = 400;
+
+            const initialHTML = `<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Documento</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+  </style>
+</head>
+<body>
+  
+</body>
+</html>`;
+
+            editorTextarea.value = initialHTML;
+            updateHighlight();
+            updatePreview();
+
+            function measureCharMetrics() {
+                const measurer = document.createElement('span');
+                measurer.style.fontFamily = getComputedStyle(editorTextarea).fontFamily;
+                measurer.style.fontSize = getComputedStyle(editorTextarea).fontSize;
+                measurer.style.lineHeight = getComputedStyle(editorTextarea).lineHeight;
+                measurer.style.position = 'absolute';
+                measurer.style.visibility = 'hidden';
+                measurer.style.whiteSpace = 'pre';
+                measurer.textContent = 'x';
+                document.body.appendChild(measurer);
+                charWidth = measurer.getBoundingClientRect().width;
+                lineHeightPx = measurer.getBoundingClientRect().height;
+                document.body.removeChild(measurer);
+                if (!charWidth || charWidth < 1) charWidth = 8.4;
+                if (!lineHeightPx || lineHeightPx < 1) lineHeightPx = 22.4;
+            }
+            measureCharMetrics();
+            window.addEventListener('resize', () => {
+                measureCharMetrics();
+                if (autocompleteVisible) positionAutocomplete();
+            });
+
+            // Sintassi highlighting (invariata)
+            function tokenize(html) {
+                const tokens = [];
+                let i = 0;
+                const len = html.length;
+                while (i < len) {
+                    if (html.startsWith('<!--', i)) {
+                        const end = html.indexOf('-->', i + 4);
+                        if (end !== -1) {
+                            tokens.push({ type:'comment', text:html.substring(i, end + 3) });
+                            i = end + 3;
+                        } else { tokens.push({ type:'comment', text:html.substring(i) }); i = len; }
+                        continue;
+                    }
+                    if (html.startsWith('<!', i) && !html.startsWith('<!--', i)) {
+                        const end = html.indexOf('>', i);
+                        if (end !== -1) { tokens.push({ type:'doctype', text:html.substring(i, end + 1) }); i = end + 1; }
+                        else { tokens.push({ type:'doctype', text:html.substring(i) }); i = len; }
+                        continue;
+                    }
+                    if (html[i] === '<') {
+                        const end = html.indexOf('>', i);
+                        if (end !== -1) { tokens.push({ type:'tag', text:html.substring(i, end + 1), inner:html.substring(i + 1, end) }); i = end + 1; }
+                        else { tokens.push({ type:'tag', text:html.substring(i), inner:html.substring(i + 1) }); i = len; }
+                        continue;
+                    }
+                    const nextLt = html.indexOf('<', i);
+                    if (nextLt !== -1) { tokens.push({ type:'text', text:html.substring(i, nextLt) }); i = nextLt; }
+                    else { tokens.push({ type:'text', text:html.substring(i) }); i = len; }
+                }
+                return tokens;
+            }
+            function tokenizeTagInner(inner) {
+                const tokens = [];
+                let i = 0;
+                const len = inner.length;
+                const nameMatch = inner.match(/^(\/?\s*)([a-zA-Z][a-zA-Z0-9_-]*)/);
+                if (nameMatch) {
+                    if (nameMatch[1]) tokens.push({ type:'punct', text:nameMatch[1] });
+                    tokens.push({ type:'tag', text:nameMatch[2] });
+                    i = nameMatch[0].length;
+                }
+                while (i < len) {
+                    const wsMatch = inner.substring(i).match(/^(\s+)/);
+                    if (wsMatch) { tokens.push({ type:'punct', text:wsMatch[1] }); i += wsMatch[1].length; continue; }
+                    if (inner[i] === '"' || inner[i] === "'") {
+                        const quote = inner[i];
+                        const endQuote = inner.indexOf(quote, i + 1);
+                        if (endQuote !== -1) { tokens.push({ type:'string', text:inner.substring(i, endQuote + 1) }); i = endQuote + 1; }
+                        else { tokens.push({ type:'string', text:inner.substring(i) }); i = len; }
+                        continue;
+                    }
+                    if (inner[i] === '=') { tokens.push({ type:'equals', text:'=' }); i++; continue; }
+                    const attrMatch = inner.substring(i).match(/^([a-zA-Z][a-zA-Z0-9_-]*)/);
+                    if (attrMatch) { tokens.push({ type:'attr', text:attrMatch[1] }); i += attrMatch[1].length; continue; }
+                    tokens.push({ type:'punct', text:inner[i] }); i++;
+                }
+                return tokens;
+            }
+            function buildHighlightedHTML(rawText) {
+                const tokens = tokenize(rawText);
+                let html = '';
+                for (const token of tokens) {
+                    if (token.type === 'comment') html += `<span class="hl-comment">${escapeHTML(token.text)}</span>`;
+                    else if (token.type === 'doctype') html += `<span class="hl-doctype">${escapeHTML(token.text)}</span>`;
+                    else if (token.type === 'tag') {
+                        const innerTokens = tokenizeTagInner(token.inner);
+                        let innerHTML = '';
+                        for (const it of innerTokens) {
+                            const cls = it.type === 'tag' ? 'hl-tag' : it.type === 'attr' ? 'hl-attr' : it.type === 'string' ? 'hl-string' : it.type === 'equals' ? 'hl-equals' : 'hl-punct';
+                            innerHTML += `<span class="${cls}">${escapeHTML(it.text)}</span>`;
+                        }
+                        html += `<span class="hl-punct">&lt;</span>${innerHTML}<span class="hl-punct">&gt;</span>`;
+                    } else { html += `<span class="hl-text">${escapeHTML(token.text)}</span>`; }
+                }
+                return html;
+            }
+            function escapeHTML(str) { return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+            function updateHighlight() { const raw = editorTextarea.value; highlightCode.innerHTML = buildHighlightedHTML(raw); highlightLayer.scrollTop = editorTextarea.scrollTop; highlightLayer.scrollLeft = editorTextarea.scrollLeft; }
+            function updatePreview() { previewIframe.srcdoc = editorTextarea.value; }
+            function schedulePreviewUpdate() { if (autoUpdate) { if (updateTimeout) clearTimeout(updateTimeout); updateTimeout = setTimeout(updatePreview, UPDATE_DEBOUNCE); } }
+
+            // Contesto CSS
+            function isInsideStyleBlock(text, cursorPos) {
+                const beforeCursor = text.substring(0, cursorPos);
+                const regex = /<style\b[^>]*>/gi;
+                let lastOpenEnd = -1;
+                let match;
+                while ((match = regex.exec(beforeCursor)) !== null) {
+                    lastOpenEnd = match.index + match[0].length;
+                }
+                if (lastOpenEnd === -1) return false;
+                const afterOpen = beforeCursor.substring(lastOpenEnd);
+                const closeIdx = afterOpen.search(/<\/style\s*>/i);
+                return closeIdx === -1 && cursorPos >= lastOpenEnd;
+            }
+            function getStyleAttributeContext(text, cursorPos) {
+                const beforeCursor = text.substring(0, cursorPos);
+                const regex = /style\s*=\s*(["'])/gi;
+                let lastQuoteChar = null;
+                let lastQuotePos = -1;
+                let match;
+                while ((match = regex.exec(beforeCursor)) !== null) {
+                    lastQuoteChar = match[1];
+                    lastQuotePos = regex.lastIndex;
+                }
+                if (lastQuotePos === -1) return { inside:false };
+                const afterOpen = beforeCursor.substring(lastQuotePos);
+                const closeIdx = afterOpen.indexOf(lastQuoteChar);
+                if (closeIdx !== -1) return { inside:false };
+                return { inside: cursorPos > lastQuotePos, quoteChar: lastQuoteChar };
+            }
+
+            // Autocomplete helpers
+            function getWordAtCursor() {
+                const text = editorTextarea.value;
+                const cursorPos = editorTextarea.selectionStart;
+                let start = cursorPos;
+                while (start > 0 && /[\w-]/.test(text[start - 1])) start--;
+                const word = text.substring(start, cursorPos);
+                const precededByLt = start > 0 && text[start - 1] === '<';
+                return { word, start, end: cursorPos, precededByLt };
+            }
+            function getFilteredHtmlSuggestions(word) {
+                if (!word || word.length < 1) return [];
+                const lower = word.toLowerCase();
+                return htmlSnippets.filter(s => s.name.startsWith(lower));
+            }
+            function getFilteredCssSuggestions(word) {
+                if (!word || word.length < 1) return [];
+                const lower = word.toLowerCase();
+                return cssSnippets.filter(s => s.name.startsWith(lower));
+            }
+
+            function positionAutocomplete() {
+                if (!currentWordData) return;
+                const containerRect = editorContainer.getBoundingClientRect();
+                const scrollTop = editorTextarea.scrollTop;
+                const scrollLeft = editorTextarea.scrollLeft;
+                const paddingTop = 16, paddingLeft = 16;
+                const textBeforeCursor = editorTextarea.value.substring(0, currentWordData.start);
+                const lines = textBeforeCursor.split('\n');
+                const cursorLine = lines.length - 1;
+                const cursorCol = lines[lines.length - 1].length;
+                const topInContent = cursorLine * lineHeightPx + paddingTop;
+                const leftInContent = cursorCol * charWidth + paddingLeft;
+                let top = topInContent - scrollTop + lineHeightPx;
+                let left = leftInContent - scrollLeft;
+                const dropdownHeight = Math.min(filteredSuggestions.length * 32, 220);
+                const containerHeight = containerRect.height;
+                const containerWidth = containerRect.width;
+                if (top + dropdownHeight > containerHeight - 8) top = topInContent - scrollTop - dropdownHeight - 4;
+                if (top < 4) top = 4;
+                if (left + 220 > containerWidth - 8) left = containerWidth - 228;
+                if (left < 4) left = 4;
+                autocompleteDropdown.style.top = top + 'px';
+                autocompleteDropdown.style.left = left + 'px';
+            }
+            function hideAutocomplete() {
+                autocompleteDropdown.classList.remove('visible');
+                autocompleteVisible = false;
+                autocompleteIndex = -1;
+                filteredSuggestions = [];
+                currentWordData = null;
+            }
+            function renderAutocompleteItems() {
+                let html = '';
+                filteredSuggestions.forEach((s, idx) => {
+                    const activeClass = idx === autocompleteIndex ? ' active' : '';
+                    const snippetPreview = s.snippet.length > 35 ? s.snippet.substring(0, 32) + '...' : s.snippet;
+                    html += `<div class="autocomplete-item${activeClass}" data-index="${idx}">
+                        <span>${escapeHTML(s.name)}</span>
+                        <span class="snippet-preview">${escapeHTML(snippetPreview)}</span>
+                    </div>`;
+                });
+                autocompleteDropdown.innerHTML = html;
+                const activeEl = autocompleteDropdown.querySelector('.autocomplete-item.active');
+                if (activeEl) activeEl.scrollIntoView({ block:'nearest' });
+            }
+            function acceptAutocomplete(index) {
+                if (!autocompleteVisible || !currentWordData) return;
+                const suggestion = filteredSuggestions[index];
+                if (!suggestion) return;
+                const snippetDef = currentCompletionType === 'css' ? cssSnippetMap[suggestion.name] : htmlSnippetMap[suggestion.name];
+                if (!snippetDef) return;
+                const text = editorTextarea.value;
+                const wordStart = currentWordData.start;
+                const wordEnd = currentWordData.end;
+
+                let insertText, cursorOffsetFromStart;
+                if (currentCompletionType === 'html' && currentWordData.precededByLt) {
+                    const name = suggestion.name;
+                    if (snippetDef.void || voidElements.has(name)) {
+                        insertText = name + '>';
+                        cursorOffsetFromStart = insertText.length;
+                    } else {
+                        insertText = name + '></' + name + '>';
+                        cursorOffsetFromStart = name.length + 1;
+                    }
+                } else {
+                    insertText = snippetDef.snippet;
+                    cursorOffsetFromStart = snippetDef.cursorOffset;
+                }
+
+                const before = text.substring(0, wordStart);
+                const after = text.substring(wordEnd);
+                editorTextarea.value = before + insertText + after;
+                const newCursorPos = wordStart + cursorOffsetFromStart;
+                editorTextarea.setSelectionRange(newCursorPos, newCursorPos);
+                hideAutocomplete();
+                updateHighlight();
+                schedulePreviewUpdate();
+                editorTextarea.focus();
+            }
+
+            // ============ INDENTAZIONE AUTOMATICA CON INVIO ============
+            function handleEnterKey(e) {
+                if (autocompleteVisible) return false; // gestito altrove
+                e.preventDefault();
+                const textarea = editorTextarea;
+                const start = textarea.selectionStart;
+                const end = textarea.selectionEnd;
+                const text = textarea.value;
+
+                // Ottieni l'inizio della riga corrente (indice del primo carattere dopo l'ultimo newline)
+                const beforeCursor = text.substring(0, start);
+                const lineStart = beforeCursor.lastIndexOf('\n') + 1;
+
+                // Trova la fine della riga corrente (prossimo newline o fine testo)
+                const nextNewline = text.indexOf('\n', start);
+                const lineEnd = nextNewline === -1 ? text.length : nextNewline;
+
+                // Testo completo della riga corrente
+                const currentLine = text.substring(lineStart, lineEnd);
+
+                // Estrai gli spazi/tab iniziali
+                const leadingWhitespace = currentLine.match(/^(\s*)/)[1];
+
+                // Inserisci newline + la stessa indentazione
+                const insertion = '\n' + leadingWhitespace;
+                textarea.value = text.substring(0, start) + insertion + text.substring(end);
+                const newCursorPos = start + insertion.length;
+                textarea.setSelectionRange(newCursorPos, newCursorPos);
+
+                updateHighlight();
+                schedulePreviewUpdate();
+                return true;
+            }
+
+            // Event listeners
+            editorTextarea.addEventListener('input', () => {
+                updateHighlight();
+                schedulePreviewUpdate();
+                const wordData = getWordAtCursor();
+                const cursorPos = editorTextarea.selectionStart;
+                const text = editorTextarea.value;
+
+                const insideStyleBlock = isInsideStyleBlock(text, cursorPos);
+                const styleAttrCtx = getStyleAttributeContext(text, cursorPos);
+                const cssContext = insideStyleBlock || styleAttrCtx.inside;
+
+                let filtered;
+                if (cssContext) {
+                    filtered = getFilteredCssSuggestions(wordData.word);
+                    currentCompletionType = 'css';
+                } else {
+                    filtered = getFilteredHtmlSuggestions(wordData.word);
+                    currentCompletionType = 'html';
+                }
+
+                if (filtered.length > 0 && wordData.word.length >= 1) {
+                    currentWordData = wordData;
+                    filteredSuggestions = filtered;
+                    autocompleteIndex = 0;
+                    renderAutocompleteItems();
+                    autocompleteDropdown.classList.add('visible');
+                    autocompleteVisible = true;
+                    positionAutocomplete();
+                } else if (autocompleteVisible) {
+                    hideAutocomplete();
+                }
+            });
+
+            editorTextarea.addEventListener('scroll', () => {
+                highlightLayer.scrollTop = editorTextarea.scrollTop;
+                highlightLayer.scrollLeft = editorTextarea.scrollLeft;
+                if (autocompleteVisible) positionAutocomplete();
+            });
+
+            editorTextarea.addEventListener('keydown', (e) => {
+                if (autocompleteVisible) {
+                    if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        autocompleteIndex = (autocompleteIndex + 1) % filteredSuggestions.length;
+                        renderAutocompleteItems();
+                        return;
+                    }
+                    if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        autocompleteIndex = (autocompleteIndex - 1 + filteredSuggestions.length) % filteredSuggestions.length;
+                        renderAutocompleteItems();
+                        return;
+                    }
+                    if (e.key === 'Enter' || e.key === 'Tab') {
+                        if (autocompleteIndex >= 0 && autocompleteIndex < filteredSuggestions.length) {
+                            e.preventDefault();
+                            acceptAutocomplete(autocompleteIndex);
+                            return;
+                        }
+                    }
+                    if (e.key === 'Escape') {
+                        e.preventDefault();
+                        hideAutocomplete();
+                        return;
+                    }
+                }
+
+                // Indentazione automatica con Enter (solo se l'autocomplete non è visibile)
+                if (e.key === 'Enter' && !autocompleteVisible) {
+                    handleEnterKey(e);
+                    return;
+                }
+
+                if (e.ctrlKey && e.key === 'Enter') {
+                    e.preventDefault();
+                    updatePreview();
+                    return;
+                }
+                if (e.key === 'Tab' && !autocompleteVisible) {
+                    e.preventDefault();
+                    const ta = editorTextarea;
+                    const start = ta.selectionStart;
+                    const end = ta.selectionEnd;
+                    ta.value = ta.value.substring(0, start) + '  ' + ta.value.substring(end);
+                    ta.setSelectionRange(start + 2, start + 2);
+                    updateHighlight();
+                    schedulePreviewUpdate();
+                }
+            });
+
+            autocompleteDropdown.addEventListener('mousedown', (e) => {
+                const item = e.target.closest('.autocomplete-item');
+                if (item) {
+                    e.preventDefault();
+                    const index = parseInt(item.getAttribute('data-index'), 10);
+                    acceptAutocomplete(index);
+                }
+            });
+
+            document.addEventListener('mousedown', (e) => {
+                if (autocompleteVisible && !autocompleteDropdown.contains(e.target) && e.target !== editorTextarea) {
+                    hideAutocomplete();
+                }
+            });
+
+            highlightLayer.addEventListener('wheel', (e) => {
+                editorTextarea.scrollTop += e.deltaY;
+                editorTextarea.scrollLeft += e.deltaX;
+                highlightLayer.scrollTop = editorTextarea.scrollTop;
+                highlightLayer.scrollLeft = editorTextarea.scrollLeft;
+                e.preventDefault();
+                if (autocompleteVisible) positionAutocomplete();
+            });
+
+            // ---------- RESIZE CON OVERLAY ----------
+            let dragStartX = 0, startEditorWidth = 0, startPreviewWidth = 0;
+            function getPanelWidthsPx() {
+                return {
+                    editor: editorPanel.getBoundingClientRect().width,
+                    preview: previewPanel.getBoundingClientRect().width
+                };
+            }
+            function setPanelsPixelWidth(editorWidthPx, previewWidthPx) {
+                editorPanel.style.flex = 'none';
+                editorPanel.style.width = editorWidthPx + 'px';
+                previewPanel.style.flex = 'none';
+                previewPanel.style.width = previewWidthPx + 'px';
+            }
+            function convertToPercentages() {
+                const containerRect = mainContainer.getBoundingClientRect();
+                const dividerWidth = divider.getBoundingClientRect().width;
+                const totalWidth = containerRect.width - dividerWidth;
+                if (totalWidth <= 0) return;
+                const editorWidth = editorPanel.getBoundingClientRect().width;
+                const editorPercent = (editorWidth / totalWidth) * 100;
+                editorPanel.style.width = `${editorPercent}%`;
+                previewPanel.style.width = `${100 - editorPercent}%`;
+                editorPanel.style.flex = 'none';
+                previewPanel.style.flex = 'none';
+            }
+            function updateResizeIndicator(clientX, clientY) {
+                const width = previewIframe.clientWidth;
+                const height = previewIframe.clientHeight;
+                resizeIndicator.textContent = `${width} × ${height}`;
+                resizeIndicator.style.display = 'block';
+                resizeIndicator.style.left = (clientX + 20) + 'px';
+                resizeIndicator.style.top = (clientY - 30) + 'px';
+            }
+
+            divider.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                if (isDragging) return;
+                const { editor, preview } = getPanelWidthsPx();
+                dragStartX = e.clientX;
+                startEditorWidth = editor;
+                startPreviewWidth = preview;
+                isDragging = true;
+                divider.classList.add('dragging');
+                document.body.style.cursor = 'col-resize';
+                document.body.style.userSelect = 'none';
+                resizeOverlay.classList.add('active');
+                resizeOverlay.style.cursor = 'col-resize';
+                updateResizeIndicator(e.clientX, e.clientY);
+            });
+
+            function onMouseMove(e) {
+                if (!isDragging) return;
+                e.preventDefault();
+                const deltaX = e.clientX - dragStartX;
+                let newEditorWidth = startEditorWidth + deltaX;
+                const minWidth = 150;
+                const totalWidth = startEditorWidth + startPreviewWidth;
+                const maxEditorWidth = totalWidth - minWidth;
+                if (newEditorWidth < minWidth) newEditorWidth = minWidth;
+                if (newEditorWidth > maxEditorWidth) newEditorWidth = maxEditorWidth;
+                const newPreviewWidth = totalWidth - newEditorWidth;
+                setPanelsPixelWidth(newEditorWidth, newPreviewWidth);
+                updateResizeIndicator(e.clientX, e.clientY);
+            }
+
+            function onMouseUp() {
+                if (isDragging) {
+                    isDragging = false;
+                    divider.classList.remove('dragging');
+                    document.body.style.cursor = '';
+                    document.body.style.userSelect = '';
+                    resizeOverlay.classList.remove('active');
+                    resizeIndicator.style.display = 'none';
+                    convertToPercentages();
+                    if (autocompleteVisible) positionAutocomplete();
+                    measureCharMetrics();
+                }
+            }
+
+            window.addEventListener('mousemove', onMouseMove);
+            window.addEventListener('mouseup', onMouseUp);
+
+            // Toggle auto-update
+            toggleAuto.addEventListener('change', () => {
+                autoUpdate = toggleAuto.checked;
+                if (autoUpdate) {
+                    hintManual.textContent = '';
+                    updatePreview();
+                } else {
+                    hintManual.textContent = 'Ctrl+Enter per aggiornare';
+                }
+            });
+
+            // Carica / Download
+            btnLoad.addEventListener('click', () => fileInput.click());
+            fileInput.addEventListener('change', () => {
+                const file = fileInput.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    editorTextarea.value = e.target.result;
+                    updateHighlight();
+                    updatePreview();
+                    hideAutocomplete();
+                    fileInput.value = '';
+                };
+                reader.readAsText(file);
+            });
+            btnDownload.addEventListener('click', () => {
+                const blob = new Blob([editorTextarea.value], { type:'text/html;charset=UTF-8' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url; a.download = 'index.html';
+                document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            });
+            document.addEventListener('keydown', (e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+                    e.preventDefault();
+                    const blob = new Blob([editorTextarea.value], { type:'text/html;charset=UTF-8' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url; a.download = 'index.html';
+                    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                }
+            });
+
+            // Inizializza
+            updateHighlight();
+            updatePreview();
+            editorTextarea.focus();
+            editorPanel.style.flex = '1';
+            previewPanel.style.flex = '1';
+            editorPanel.style.width = '';
+            previewPanel.style.width = '';
+        })();
+    </script>
+</body>
+</html>
